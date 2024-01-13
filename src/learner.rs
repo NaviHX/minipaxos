@@ -1,7 +1,7 @@
 #[derive(Clone)]
 pub struct LearnMessage<T: Clone> {
     pub instance: u64,
-pub acceptor_id: AcceptorID,
+    pub acceptor_id: AcceptorID,
     pub proposal: T,
 }
 pub struct LearnReply;
@@ -45,7 +45,7 @@ impl<T: Clone + Eq> InnerLearner<T> {
             .or_insert(proposal.clone());
 
         let learned_num = self.accepted_proposals.len();
-        if learned_num <= self.acceptor_num {
+        if learned_num < (self.acceptor_num + 1) / 2 {
             return None;
         }
 
@@ -66,7 +66,7 @@ impl<T: Clone + Eq> InnerLearner<T> {
             }
         }
 
-        if count - self.acceptor_num + learned_num > 0 {
+        if count + learned_num > self.acceptor_num  {
             quorom_proposal
         } else {
             None
@@ -218,5 +218,25 @@ where
                 Box::new(async move { learner.lock().unwrap().read(message) })
             })
             .await;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::InnerLearner;
+
+    #[test]
+    fn learner_test() {
+        let acceptor_id = [
+            uuid::uuid!("00000000-0000-0000-0000-000000000001"),
+            uuid::uuid!("00000000-0000-0000-0000-000000000002"),
+            uuid::uuid!("00000000-0000-0000-0000-000000000003"),
+        ];
+        let acceptor_num = acceptor_id.len();
+        let mut learner = InnerLearner::new(acceptor_num);
+
+        assert!(learner.learn(acceptor_id[0], false).is_none());
+        assert!(learner.learn(acceptor_id[1], true).is_none());
+        assert!(learner.learn(acceptor_id[2], true).unwrap_or(false));
     }
 }

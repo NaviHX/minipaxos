@@ -37,7 +37,7 @@ impl<T: Clone> InnerAcceptor<T> {
             .ballot
             .as_ref()
             .map(|&my_ballot| my_ballot < ballot)
-            .unwrap_or(false)
+            .unwrap_or(true)
         {
             true => {
                 self.ballot = Some(ballot);
@@ -70,23 +70,21 @@ impl<T: Clone> InnerAcceptor<T> {
     }
 }
 
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
+
+use tokio::sync::mpsc::{self, Receiver};
 
 pub type AcceptorID = Uuid;
 
 pub struct Acceptor<T: Clone> {
     id: AcceptorID,
     inner_acceptors: HashMap<u64, InnerAcceptor<T>>,
-    learn_requests: VecDeque<LearnMessage<T>>,
+    learn_request_tx: mpsc::Sender<LearnMessage<T>>,
 }
 
 use futures::future::join_all;
-use uuid::Uuid;
-use std::sync::Mutex as StdMutex;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 use crate::{
     communication::{Requester, Server},
@@ -96,12 +94,16 @@ use crate::{
 type BoxedLearnRequester<T, E> = Box<dyn Requester<LearnMessage<T>, E, Output = LearnReply>>;
 
 impl<T: Clone + 'static> Acceptor<T> {
-    pub fn new(id: AcceptorID) -> Self {
-        Self {
-            id,
-            inner_acceptors: HashMap::new(),
-            learn_requests: VecDeque::new(),
-        }
+    pub fn new(id: AcceptorID, buffer_size: usize) -> (Self, Receiver<LearnMessage<T>>) {
+        let (tx, rx) = mpsc::channel(buffer_size);
+        (
+            Self {
+                id,
+                inner_acceptors: HashMap::new(),
+                learn_request_tx: tx,
+            },
+            rx,
+        )
     }
 
     pub fn prepare(
@@ -142,45 +144,96 @@ impl<T: Clone + 'static> Acceptor<T> {
         .await;
     }
 
+    pub async fn process_learn_request<E>(
+        learners: Arc<Mutex<Vec<BoxedLearnRequester<T, E>>>>,
+        mut receiver: Receiver<LearnMessage<T>>,
+    ) {
+        while let Some(msg) = receiver.recv().await {
+            Self::send_learn(learners.clone(), msg).await;
+        }
+    }
+
     pub async fn serve_preparer(
-        acceptor: Arc<StdMutex<Self>>,
+        acceptor: Arc<Mutex<Self>>,
         mut server: impl Server<PrepareMessage, Output = PrepareReply<T>>,
     ) {
         server
             .run(move |message| {
                 let acceptor = acceptor.clone();
-                Box::new(async move { acceptor.lock().unwrap().prepare(message) })
+                Box::new(async move { acceptor.lock().await.prepare(message) })
             })
             .await;
     }
 
     pub async fn serve_acceptor(
-        acceptor: Arc<StdMutex<Self>>,
+        acceptor: Arc<Mutex<Self>>,
         mut server: impl Server<AcceptMessage<T>, Output = AcceptReply>,
     ) {
         server
             .run(move |message| {
                 let acceptor = acceptor.clone();
                 Box::new(async move {
-                    let reply = acceptor.lock().unwrap().accept(message.clone());
+                    let reply = acceptor.lock().await.accept(message.clone());
 
                     if reply.state {
                         let new_learn_request = LearnMessage {
                             instance: message.instance,
-                            acceptor_id: acceptor.lock().unwrap().id,
+                            acceptor_id: acceptor.lock().await.id,
                             proposal: message.proposal,
                         };
 
-                        acceptor
+                        let _ = acceptor
                             .lock()
-                            .unwrap()
-                            .learn_requests
-                            .push_back(new_learn_request);
+                            .await
+                            .learn_request_tx
+                            .send(new_learn_request)
+                            .await;
                     }
 
                     reply
                 })
             })
             .await;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::InnerAcceptor;
+
+    #[test]
+    fn acceptor_test() {
+        let mut acceptor = InnerAcceptor::new();
+        let ballot = 1;
+        let prepare_reply = acceptor.prepare(ballot);
+
+        assert!(prepare_reply.state);
+        assert!(prepare_reply.ballot.map(|b| b == 1).unwrap_or(false));
+        assert!(prepare_reply.proposal.is_none());
+
+        let accept_reply = acceptor.accept(ballot, true);
+        assert!(accept_reply.state);
+    }
+
+    #[test]
+    fn acceptor_with_proposal_test() {
+        let mut acceptor = InnerAcceptor::new();
+        acceptor.ballot = Some(2);
+        acceptor.accepted_proposal = Some(2);
+
+        let prepare_reply = acceptor.prepare(1);
+        assert!(!prepare_reply.state);
+        assert!(prepare_reply.ballot.map(|b| b == 2).unwrap_or(false));
+        assert!(prepare_reply.proposal.map(|p| p == 2).unwrap_or(false));
+
+        let prepare_reply = acceptor.prepare(3);
+        assert!(prepare_reply.state);
+        assert!(prepare_reply.ballot.map(|b| b == 3).unwrap_or(false));
+        assert!(prepare_reply.proposal.map(|p| p == 2).unwrap_or(false));
+
+        let accept_reply = acceptor.accept(3, 3);
+        assert!(accept_reply.state);
+        assert!(acceptor.ballot.map(|b| b == 3).unwrap_or(false));
+        assert!(acceptor.accepted_proposal.map(|p| p == 3).unwrap_or(false));
     }
 }

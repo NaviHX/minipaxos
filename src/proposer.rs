@@ -48,19 +48,13 @@ impl<P: Clone> Proposer<P> {
             .filter_map(|result| result.ok())
             .collect();
 
-            let max_ballot = replies
-                .iter()
-                .filter_map(|prepare_reply| prepare_reply.ballot)
-                .max();
-            let positive_count = replies
-                .iter()
-                .filter(|prepare_reply| prepare_reply.state)
-                .count();
+            let max_ballot = Self::get_max_ballot(replies.as_slice());
+            let positive_count = Self::get_positive_count(replies.as_slice());
             let preparer_count = preparers.lock().await.len();
 
             if positive_count < (preparer_count + 1) / 2 {
                 if let Some(max_ballot) = max_ballot {
-                    ballot = max_ballot + 1;
+                    ballot = max_ballot.max(ballot) + 1;
                 } else {
                     ballot += 1;
                 }
@@ -75,28 +69,7 @@ impl<P: Clone> Proposer<P> {
                 continue;
             }
 
-            let accepted_proposal: Option<P> = replies
-                .iter()
-                .fold(
-                    (0, None),
-                    |(max_ballot, max_proposal),
-                     PrepareReply {
-                         ballot,
-                         proposal,
-                         state: _,
-                     }| {
-                        if proposal.is_some()
-                            && (max_proposal.is_none()
-                                || ballot.map(|ballot| ballot > max_ballot).unwrap_or(true))
-                        {
-                            (ballot.unwrap_or(0), proposal.clone())
-                        } else {
-                            (max_ballot, max_proposal)
-                        }
-                    },
-                )
-                .1;
-
+            let accepted_proposal = Self::get_max_accepted_proposal(replies.as_slice());
             let (proposed, current_proposal) = if let Some(p) = accepted_proposal {
                 (false, p)
             } else {
@@ -129,10 +102,132 @@ impl<P: Clone> Proposer<P> {
             }
         }
     }
+
+    pub fn get_max_ballot(replies: &[PrepareReply<P>]) -> Option<u64> {
+        replies
+            .iter()
+            .filter_map(|prepare_reply| prepare_reply.ballot)
+            .max()
+    }
+
+    pub fn get_positive_count(replies: &[PrepareReply<P>]) -> usize {
+        replies.iter().filter(|p| p.state).count()
+    }
+
+    pub fn get_max_accepted_proposal(replies: &[PrepareReply<P>]) -> Option<P> {
+        replies
+            .iter()
+            .fold(
+                (0, None),
+                |(max_ballot, max_proposal),
+                 PrepareReply {
+                     state: _,
+                     ballot,
+                     proposal,
+                 }| {
+                    if proposal.is_some()
+                        && (max_proposal.is_none()
+                            || ballot.map(|ballot| ballot > max_ballot).unwrap_or(false))
+                    {
+                        (ballot.unwrap_or(0), proposal.clone())
+                    } else {
+                        (max_ballot, max_proposal)
+                    }
+                },
+            )
+            .1
+    }
 }
 
 impl<P: Clone> Default for Proposer<P> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{acceptor::PrepareReply, proposer::Proposer};
+
+    #[test]
+    fn max_ballot_test() {
+        let replies: &[PrepareReply<()>] = &[];
+        assert_eq!(Proposer::get_max_ballot(replies), None);
+
+        let replies: &[PrepareReply<()>] = &[PrepareReply {
+            state: true,
+            ballot: None,
+            proposal: None,
+        }];
+        assert_eq!(Proposer::get_max_ballot(replies), None);
+
+        let replies: &[PrepareReply<()>] = &[PrepareReply {
+            state: true,
+            ballot: Some(1),
+            proposal: None,
+        }];
+        assert_eq!(Proposer::get_max_ballot(replies), Some(1));
+
+        let replies: &[PrepareReply<()>] = &[
+            PrepareReply {
+                state: true,
+                ballot: Some(1),
+                proposal: None,
+            },
+            PrepareReply {
+                state: true,
+                ballot: Some(2),
+                proposal: None,
+            },
+        ];
+        assert_eq!(Proposer::get_max_ballot(replies), Some(2));
+    }
+
+    #[test]
+    fn max_accepted_proposal_test() {
+        let replies: &[PrepareReply<usize>] = &[];
+        assert_eq!(Proposer::get_max_ballot(replies), None);
+
+        let replies: &[PrepareReply<()>] = &[PrepareReply {
+            state: true,
+            ballot: None,
+            proposal: None,
+        }];
+        assert_eq!(Proposer::get_max_accepted_proposal(replies), None);
+
+        let replies: &[PrepareReply<usize>] = &[PrepareReply {
+            state: true,
+            ballot: Some(1),
+            proposal: Some(1),
+        }];
+        assert_eq!(Proposer::get_max_accepted_proposal(replies), Some(1));
+
+        let replies: &[PrepareReply<usize>] = &[
+            PrepareReply {
+                state: true,
+                ballot: Some(1),
+                proposal: Some(1),
+            },
+            PrepareReply {
+                state: true,
+                ballot: Some(2),
+                proposal: Some(2),
+            },
+        ];
+        assert_eq!(Proposer::get_max_accepted_proposal(replies), Some(2));
+
+        let replies: &[PrepareReply<usize>] = &[
+            PrepareReply {
+                state: true,
+                ballot: Some(1),
+                proposal: Some(1),
+            },
+            PrepareReply {
+                state: true,
+                ballot: Some(2),
+                proposal: None,
+            },
+        ];
+        assert_eq!(Proposer::get_max_accepted_proposal(replies), Some(1));
     }
 }

@@ -91,9 +91,9 @@ use crate::{
     learner::{LearnMessage, LearnReply},
 };
 
-type BoxedLearnRequester<T, E> = Box<dyn Requester<LearnMessage<T>, E, Output = LearnReply>>;
+type BoxedLearnRequester<T, E> = Box<dyn Requester<LearnMessage<T>, E, Output = LearnReply> + Send>;
 
-impl<T: Clone + 'static> Acceptor<T> {
+impl<T: Clone + Send + 'static> Acceptor<T> {
     pub fn new(id: AcceptorID, buffer_size: usize) -> (Self, Receiver<LearnMessage<T>>) {
         let (tx, rx) = mpsc::channel(buffer_size);
         (
@@ -134,10 +134,10 @@ impl<T: Clone + 'static> Acceptor<T> {
     }
 
     pub async fn send_learn<E>(
-        learners: Arc<Mutex<Vec<BoxedLearnRequester<T, E>>>>,
+        learners: &mut [BoxedLearnRequester<T, E>],
         message: LearnMessage<T>,
     ) {
-        let _ = join_all(learners.lock().await.iter_mut().map(|requester| {
+        let _ = join_all(learners.iter_mut().map(|requester| {
             let message = message.clone();
             requester.request(message)
         }))
@@ -145,34 +145,34 @@ impl<T: Clone + 'static> Acceptor<T> {
     }
 
     pub async fn process_learn_request<E>(
-        learners: Arc<Mutex<Vec<BoxedLearnRequester<T, E>>>>,
+        mut learners: Vec<BoxedLearnRequester<T, E>>,
         mut receiver: Receiver<LearnMessage<T>>,
     ) {
         while let Some(msg) = receiver.recv().await {
-            Self::send_learn(learners.clone(), msg).await;
+            Self::send_learn(learners.as_mut_slice(), msg).await;
         }
     }
 
     pub async fn serve_preparer(
         acceptor: Arc<Mutex<Self>>,
-        mut server: impl Server<PrepareMessage, Output = PrepareReply<T>>,
+        server: &mut impl Server<'_, PrepareMessage, Output = PrepareReply<T>>,
     ) {
         server
             .run(move |message| {
                 let acceptor = acceptor.clone();
-                Box::new(async move { acceptor.lock().await.prepare(message) })
+                Box::pin(async move { acceptor.lock().await.prepare(message) })
             })
             .await;
     }
 
     pub async fn serve_acceptor(
         acceptor: Arc<Mutex<Self>>,
-        mut server: impl Server<AcceptMessage<T>, Output = AcceptReply>,
+        server: &mut impl Server<'_, AcceptMessage<T>, Output = AcceptReply>,
     ) {
         server
             .run(move |message| {
                 let acceptor = acceptor.clone();
-                Box::new(async move {
+                Box::pin(async move {
                     let reply = acceptor.lock().await.accept(message.clone());
 
                     if reply.state {

@@ -4,6 +4,7 @@ pub struct LearnMessage<T: Clone> {
     pub acceptor_id: AcceptorID,
     pub proposal: T,
 }
+#[derive(Clone)]
 pub struct LearnReply;
 
 pub struct ReadReply<O> {
@@ -20,7 +21,8 @@ pub trait Backend<T, Q> {
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::acceptor::AcceptorID;
 use crate::communication::Server;
@@ -127,9 +129,9 @@ impl From<bool> for ProcessPoll {
 
 impl<T, B, Q> Learner<T, B, Q>
 where
-    B: Backend<T, Q> + 'static,
-    T: Clone + Eq + 'static,
-    Q: 'static,
+    B: Backend<T, Q> + 'static + Send,
+    T: Clone + Eq + 'static + Send,
+    Q: Send + 'static,
 {
     pub fn new(acceptor_num: usize, backend: B) -> Self {
         Self {
@@ -198,24 +200,24 @@ where
 
     pub async fn serve_learner(
         learner: Arc<Mutex<Self>>,
-        mut server: impl Server<LearnMessage<T>, Output = LearnReply>,
+        server: &mut impl Server<'_, LearnMessage<T>, Output = LearnReply>,
     ) {
         server
             .run(move |message| {
                 let learner = learner.clone();
-                Box::new(async move { learner.lock().unwrap().learn(message) })
+                Box::pin(async move { learner.lock().await.learn(message) })
             })
             .await;
     }
 
     pub async fn serve_reader(
         learner: Arc<Mutex<Self>>,
-        mut server: impl Server<Q, Output = ReadReply<B::Output>>,
+        server: &mut impl Server<'_, Q, Output = ReadReply<B::Output>>,
     ) {
         server
             .run(move |message| {
                 let learner = learner.clone();
-                Box::new(async move { learner.lock().unwrap().read(message) })
+                Box::pin(async move { learner.lock().await.read(message) })
             })
             .await;
     }

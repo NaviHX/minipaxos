@@ -28,8 +28,8 @@ impl<P: Clone> Proposer<P> {
     pub async fn propose<E1, E2>(
         &mut self,
         proposal: P,
-        preparers: Arc<Mutex<Vec<BoxedPrepareRequester<P, E1>>>>,
-        acceptors: Arc<Mutex<Vec<BoxedAcceptRequester<P, E2>>>>,
+        mut preparers: impl AsMut<Vec<BoxedPrepareRequester<P, E1>>>,
+        mut acceptors: impl AsMut<Vec<BoxedAcceptRequester<P, E2>>>,
         sleep_range: Range<u64>,
     ) -> u64 {
         let mut ballot = 1;
@@ -38,8 +38,7 @@ impl<P: Clone> Proposer<P> {
             let prepare_message = PrepareMessage { instance, ballot };
             let replies: Vec<_> = join_all(
                 preparers
-                    .lock()
-                    .await
+                    .as_mut()
                     .iter_mut()
                     .map(|preparer| preparer.request(prepare_message.clone())),
             )
@@ -50,7 +49,7 @@ impl<P: Clone> Proposer<P> {
 
             let max_ballot = Self::get_max_ballot(replies.as_slice());
             let positive_count = Self::get_positive_count(replies.as_slice());
-            let preparer_count = preparers.lock().await.len();
+            let preparer_count = preparers.as_mut().len();
 
             if positive_count < (preparer_count + 1) / 2 {
                 if let Some(max_ballot) = max_ballot {
@@ -76,7 +75,7 @@ impl<P: Clone> Proposer<P> {
                 (true, proposal.clone())
             };
 
-            let results = join_all(acceptors.lock().await.iter_mut().map(|acceptor| {
+            let results = join_all(acceptors.as_mut().iter_mut().map(|acceptor| {
                 let message = AcceptMessage {
                     instance,
                     ballot,
@@ -91,7 +90,7 @@ impl<P: Clone> Proposer<P> {
                 .filter_map(|result| result.as_ref().ok())
                 .filter(|result| result.state)
                 .count();
-            let acceptor_count = acceptors.lock().await.len();
+            let acceptor_count = acceptors.as_mut().len();
 
             if positive_count >= (acceptor_count + 1) / 2 {
                 self.propose_id += 1;

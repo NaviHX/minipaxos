@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::{future::Future, pin::Pin};
 
 use async_trait::async_trait;
 
@@ -9,10 +9,10 @@ pub trait Requester<T, E> {
 }
 
 #[async_trait]
-pub trait Server<T> {
+pub trait Server<T, 'server> {
     type Output;
 
-    async fn run<F>(&mut self, f: F) -> Self::Output
+    async fn run<F>(&mut self, f: F)
     where
-        F: Fn(T) -> Box<dyn Future<Output = Self::Output>>;
+        F: 'server + Fn(T) -> Pin<Box<dyn Future<Output = Self::Output> + Send>> + Send;
 }

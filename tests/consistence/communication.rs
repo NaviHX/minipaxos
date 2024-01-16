@@ -5,8 +5,10 @@ use async_trait::async_trait;
 use minipaxos::communication::{Requester, Server};
 use std::future::Future;
 
+type PinnedSendFuture<O> = Pin<Box<dyn Future<Output = O> + Send>>;
+
 pub struct LocalServer<'server, Q, R> {
-    process_block: Option<Box<dyn Fn(Q) -> Pin<Box<dyn Future<Output = R> + Send>> + Send + 'server>>,
+    process_block: Option<Box<dyn Fn(Q) -> PinnedSendFuture<R> + Send + 'server>>,
 }
 
 #[derive(Clone)]

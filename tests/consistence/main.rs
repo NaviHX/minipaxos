@@ -3,7 +3,7 @@ use std::sync::Arc;
 use minipaxos::{
     acceptor::Acceptor,
     communication::Requester,
-    learner::Learner, proposer::Proposer,
+    learner::Learner, proposer::Proposer, reader::Reader,
 };
 
 mod backend;
@@ -12,6 +12,8 @@ mod communication;
 use backend::{KVDataBase, KVSet};
 use communication::LocalServer;
 use tokio::sync::Mutex;
+
+use crate::backend::KVGet;
 
 const LEARNER_NUM: usize = 3;
 const ACCEPTOR_NUM: usize = 3;
@@ -23,8 +25,9 @@ async fn consistence() {
             let be = KVDataBase::new();
             let learner = Arc::new(Mutex::new(Learner::new(ACCEPTOR_NUM, be)));
             let learner_server = LocalServer::new();
+            let reader_server = LocalServer::new();
 
-            (learner, learner_server)
+            (learner, learner_server, reader_server)
         })
         .collect();
 
@@ -40,14 +43,21 @@ async fn consistence() {
         .collect();
 
     let mut learn_requesters = vec![vec![]; ACCEPTOR_NUM];
-    for (learner, mut learner_server) in learners.into_iter() {
+    let mut read_requesters = vec![];
+    for (learner, mut learner_server, mut reader_server) in learners.into_iter() {
         Learner::serve_learner(learner.clone(), &mut learner_server).await;
         let learner_server = Arc::new(Mutex::new(learner_server));
 
-        for j in 0..ACCEPTOR_NUM {
+        for it in learn_requesters.iter_mut() {
             let learn_requester = LocalServer::new_requester(&learner_server);
-            learn_requesters[j].push(learn_requester);
+            it.push(learn_requester);
         }
+
+        Learner::serve_reader(learner.clone(), &mut reader_server).await;
+        let reader_server = Arc::new(Mutex::new(reader_server));
+        let read_requester = LocalServer::new_requester(&reader_server);
+        let read_requester: Box<dyn Requester<_, _, Output = _>> = Box::new(read_requester);
+        read_requesters.push(read_requester);
     }
 
     let mut prepare_requesters = vec![];
@@ -78,4 +88,10 @@ async fn consistence() {
     proposer.propose(KVSet::new("2", "2"), &mut prepare_requesters, &mut accept_requesters, 50..100).await;
     proposer.propose(KVSet::new("3", "3"), &mut prepare_requesters, &mut accept_requesters, 50..100).await;
     proposer.propose(KVSet::new("4", "4"), &mut prepare_requesters, &mut accept_requesters, 50..100).await;
+
+    let mut reader = Reader::new();
+    assert_eq!(reader.read(KVGet::new("1"), &mut read_requesters).await, Some(Some("1".to_owned())));
+    assert_eq!(reader.read(KVGet::new("2"), &mut read_requesters).await, Some(Some("2".to_owned())));
+    assert_eq!(reader.read(KVGet::new("3"), &mut read_requesters).await, Some(Some("3".to_owned())));
+    assert_eq!(reader.read(KVGet::new("4"), &mut read_requesters).await, Some(Some("4".to_owned())));
 }

@@ -1,7 +1,6 @@
 use futures::future::join_all;
 use rand::Rng;
-use std::{marker::PhantomData, ops::Range, sync::Arc};
-use tokio::sync::Mutex;
+use std::{marker::PhantomData, ops::Range};
 
 use crate::{
     acceptor::{AcceptMessage, AcceptReply, PrepareMessage, PrepareReply},

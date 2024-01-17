@@ -84,6 +84,7 @@ pub struct Acceptor<T: Clone> {
 
 use futures::future::join_all;
 use tokio::sync::Mutex;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
@@ -106,10 +107,15 @@ impl<T: Clone + Send + 'static> Acceptor<T> {
         )
     }
 
+    #[tracing::instrument(
+        skip(self)
+    )]
     pub fn prepare(
         &mut self,
         PrepareMessage { instance, ballot }: PrepareMessage,
     ) -> PrepareReply<T> {
+        debug!("Receive Prepare: {instance}.{ballot}");
+
         let acceptor = self
             .inner_acceptors
             .entry(instance)
@@ -117,6 +123,9 @@ impl<T: Clone + Send + 'static> Acceptor<T> {
         acceptor.prepare(ballot)
     }
 
+    #[tracing::instrument(
+        skip(self, proposal)
+    )]
     pub fn accept(
         &mut self,
         AcceptMessage {
@@ -125,6 +134,8 @@ impl<T: Clone + Send + 'static> Acceptor<T> {
             proposal,
         }: AcceptMessage<T>,
     ) -> AcceptReply {
+        debug!("Receive Accept: {instance}.{ballot}");
+
         if let Some(acceptor) = self.inner_acceptors.get_mut(&instance) {
             let reply = acceptor.accept(ballot, proposal);
             return reply;

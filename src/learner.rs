@@ -1,3 +1,5 @@
+use tracing::debug;
+
 #[derive(Clone)]
 pub struct LearnMessage<T: Clone> {
     pub instance: u64,
@@ -68,7 +70,7 @@ impl<T: Clone + Eq> InnerLearner<T> {
             }
         }
 
-        if count + learned_num > self.acceptor_num  {
+        if count + learned_num > self.acceptor_num {
             quorom_proposal
         } else {
             None
@@ -113,6 +115,7 @@ where
     phantom_q: PhantomData<Q>,
 }
 
+#[derive(PartialEq, Eq)]
 pub enum ProcessPoll {
     Ready,
     Wait,
@@ -144,6 +147,9 @@ where
         }
     }
 
+    #[tracing::instrument(
+        skip(self, proposal)
+    )]
     pub fn learn(
         &mut self,
         LearnMessage {
@@ -163,6 +169,8 @@ where
             .entry(instance)
             .or_insert_with(|| InnerLearner::new(self.acceptor_num));
         if let Some(quorom_proposal) = learner.learn(acceptor, proposal) {
+            debug!("Push Learn Request: {}", instance);
+
             self.proposals
                 .push(OrdTag(Reverse(instance), quorom_proposal));
             if instance == self.processed {

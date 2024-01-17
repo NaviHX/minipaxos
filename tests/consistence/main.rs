@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use minipaxos::{
-    acceptor::Acceptor,
-    communication::Requester,
-    learner::Learner, proposer::Proposer, reader::Reader,
+    acceptor::Acceptor, communication::Requester, learner::Learner, proposer::Proposer,
+    reader::Reader,
 };
 
 mod backend;
@@ -67,31 +66,83 @@ async fn consistence() {
     {
         Acceptor::serve_preparer(acceptor.clone(), &mut prepare_server).await;
         Acceptor::serve_acceptor(acceptor.clone(), &mut accept_server).await;
-        let learn_requesters = learn_requesters.into_iter().map(|b| {
+        let learn_requesters = learn_requesters
+            .into_iter()
+            .map(|b| {
                 let b: Box<dyn Requester<_, _, Output = _> + Send> = Box::new(b);
                 b
-        }).collect();
-        tokio::spawn(Acceptor::process_learn_request(learn_requesters, inner_receiver));
+            })
+            .collect();
+        tokio::spawn(Acceptor::process_learn_request(
+            learn_requesters,
+            inner_receiver,
+        ));
 
         let prepare_server = Arc::new(Mutex::new(prepare_server));
         let accept_server = Arc::new(Mutex::new(accept_server));
 
-        let prepare_requester = Box::new(LocalServer::new_requester(&prepare_server)) as Box<dyn Requester<_, _, Output = _>>;
-        let accept_requester = Box::new(LocalServer::new_requester(&accept_server)) as Box<dyn Requester<_, _, Output = _>>;
+        let prepare_requester = Box::new(LocalServer::new_requester(&prepare_server))
+            as Box<dyn Requester<_, _, Output = _>>;
+        let accept_requester = Box::new(LocalServer::new_requester(&accept_server))
+            as Box<dyn Requester<_, _, Output = _>>;
 
         prepare_requesters.push(prepare_requester);
         accept_requesters.push(accept_requester);
     }
 
     let mut proposer = Proposer::new();
-    proposer.propose(KVSet::new("1", "1"), &mut prepare_requesters, &mut accept_requesters, 50..100).await;
-    proposer.propose(KVSet::new("2", "2"), &mut prepare_requesters, &mut accept_requesters, 50..100).await;
-    proposer.propose(KVSet::new("3", "3"), &mut prepare_requesters, &mut accept_requesters, 50..100).await;
-    proposer.propose(KVSet::new("4", "4"), &mut prepare_requesters, &mut accept_requesters, 50..100).await;
+    proposer
+        .propose(
+            KVSet::new("1", "1"),
+            &mut prepare_requesters,
+            &mut accept_requesters,
+            50..100,
+        )
+        .await;
+    proposer
+        .propose(
+            KVSet::new("2", "2"),
+            &mut prepare_requesters,
+            &mut accept_requesters,
+            50..100,
+        )
+        .await;
+    proposer
+        .propose(
+            KVSet::new("3", "3"),
+            &mut prepare_requesters,
+            &mut accept_requesters,
+            50..100,
+        )
+        .await;
+    proposer
+        .propose(
+            KVSet::new("4", "4"),
+            &mut prepare_requesters,
+            &mut accept_requesters,
+            50..100,
+        )
+        .await;
+
+    // Tokio runtime for testing spawns only one thread,
+    // so we must wait till all messages are processed.
+    tokio::task::yield_now().await;
 
     let mut reader = Reader::new();
-    assert_eq!(reader.read(KVGet::new("1"), &mut read_requesters).await, Some(Some("1".to_owned())));
-    assert_eq!(reader.read(KVGet::new("2"), &mut read_requesters).await, Some(Some("2".to_owned())));
-    assert_eq!(reader.read(KVGet::new("3"), &mut read_requesters).await, Some(Some("3".to_owned())));
-    assert_eq!(reader.read(KVGet::new("4"), &mut read_requesters).await, Some(Some("4".to_owned())));
+    assert_eq!(
+        reader.read(KVGet::new("1"), &mut read_requesters).await,
+        Some(Some("1".to_owned()))
+    );
+    assert_eq!(
+        reader.read(KVGet::new("2"), &mut read_requesters).await,
+        Some(Some("2".to_owned()))
+    );
+    assert_eq!(
+        reader.read(KVGet::new("3"), &mut read_requesters).await,
+        Some(Some("3".to_owned()))
+    );
+    assert_eq!(
+        reader.read(KVGet::new("4"), &mut read_requesters).await,
+        Some(Some("4".to_owned()))
+    );
 }

@@ -152,7 +152,9 @@ where
             proposal,
         }: LearnMessage<T>,
     ) -> LearnReply {
-        if instance <= self.processed {
+        debug!("Received Learn Request: {}", instance);
+
+        if instance < self.processed {
             return LearnReply;
         }
 
@@ -164,6 +166,7 @@ where
             self.proposals
                 .push(OrdTag(Reverse(instance), quorom_proposal));
             if instance == self.processed {
+                while self.process() == ProcessPoll::Ready {}
                 return LearnReply;
             }
         }
@@ -174,7 +177,7 @@ where
     pub fn process(&mut self) -> ProcessPoll {
         let peek = self.proposals.peek();
         if let Some(OrdTag(Reverse(instance), proposal)) = peek {
-            if *instance == self.processed + 1 {
+            if *instance == self.processed {
                 self.backend.process(proposal.clone());
                 self.proposals.pop();
                 self.processed += 1;

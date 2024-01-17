@@ -16,6 +16,7 @@ use crate::backend::KVGet;
 
 const LEARNER_NUM: usize = 3;
 const ACCEPTOR_NUM: usize = 3;
+const TESTS: usize = 4;
 
 #[tokio::test]
 async fn consistence() {
@@ -91,58 +92,28 @@ async fn consistence() {
     }
 
     let mut proposer = Proposer::new();
-    proposer
-        .propose(
-            KVSet::new("1", "1"),
-            &mut prepare_requesters,
-            &mut accept_requesters,
-            50..100,
-        )
-        .await;
-    proposer
-        .propose(
-            KVSet::new("2", "2"),
-            &mut prepare_requesters,
-            &mut accept_requesters,
-            50..100,
-        )
-        .await;
-    proposer
-        .propose(
-            KVSet::new("3", "3"),
-            &mut prepare_requesters,
-            &mut accept_requesters,
-            50..100,
-        )
-        .await;
-    proposer
-        .propose(
-            KVSet::new("4", "4"),
-            &mut prepare_requesters,
-            &mut accept_requesters,
-            50..100,
-        )
-        .await;
+    for i in 0..TESTS {
+        proposer
+            .propose(
+                KVSet::new(format!("{i}"), format!("{i}")),
+                &mut prepare_requesters,
+                &mut accept_requesters,
+                50..100,
+            )
+            .await;
+    }
 
     // Tokio runtime for testing spawns only one thread,
     // so we must wait till all messages are processed.
     tokio::task::yield_now().await;
 
     let mut reader = Reader::new();
-    assert_eq!(
-        reader.read(KVGet::new("1"), &mut read_requesters).await,
-        Some(Some("1".to_owned()))
-    );
-    assert_eq!(
-        reader.read(KVGet::new("2"), &mut read_requesters).await,
-        Some(Some("2".to_owned()))
-    );
-    assert_eq!(
-        reader.read(KVGet::new("3"), &mut read_requesters).await,
-        Some(Some("3".to_owned()))
-    );
-    assert_eq!(
-        reader.read(KVGet::new("4"), &mut read_requesters).await,
-        Some(Some("4".to_owned()))
-    );
+    for i in 0..TESTS {
+        assert_eq!(
+            reader
+                .read(KVGet::new(format!("{i}")), &mut read_requesters)
+                .await,
+            Some(Some(format!("{i}")))
+        )
+    }
 }

@@ -19,7 +19,7 @@ const ACCEPTOR_NUM: usize = 3;
 const TESTS: usize = 4;
 
 #[tokio::test]
-async fn consistence() {
+async fn single() {
     let learners: Vec<_> = (0..LEARNER_NUM)
         .map(|_| {
             let be = KVDataBase::new();

@@ -24,6 +24,64 @@ impl<P: Clone> Proposer<P> {
         }
     }
 
+    async fn prepare<E>(
+        &mut self,
+        preparers: &mut impl AsMut<Vec<BoxedPrepareRequester<P, E>>>,
+        instance: u64,
+        ballot: u64,
+        prepare_count: usize,
+    ) -> (bool, Option<u64>, Option<P>) {
+        let prepare_message = PrepareMessage { instance, ballot };
+        let replies: Vec<_> = join_all(
+            preparers
+                .as_mut()
+                .iter_mut()
+                .map(|preparer| preparer.request(prepare_message.clone())),
+        )
+        .await
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .collect();
+
+        let positive_count = Self::get_positive_count(replies.as_slice(), |r| r.state);
+        let max_accepted_proposal = Self::get_max_accepted_proposal(replies.as_slice());
+        let max_ballot = Self::get_max_ballot(replies.as_slice());
+
+        (
+            positive_count >= (prepare_count + 1) / 2,
+            max_ballot,
+            max_accepted_proposal,
+        )
+    }
+
+    async fn accept<E>(
+        &mut self,
+        acceptors: &mut impl AsMut<Vec<BoxedAcceptRequester<P, E>>>,
+        instance: u64,
+        ballot: u64,
+        proposal: P,
+        acceptor_count: usize,
+    ) -> bool {
+        let accept_message = AcceptMessage {
+            instance,
+            ballot,
+            proposal,
+        };
+        let replies: Vec<_> = join_all(
+            acceptors
+                .as_mut()
+                .iter_mut()
+                .map(|acceptor| acceptor.request(accept_message.clone())),
+        )
+        .await
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .collect();
+
+        let positive_count = Self::get_positive_count(replies.as_slice(), |r| r.state);
+        positive_count >= (acceptor_count + 1) / 2
+    }
+
     pub async fn propose<E1, E2>(
         &mut self,
         proposal: P,
@@ -34,23 +92,10 @@ impl<P: Clone> Proposer<P> {
         let mut ballot = 1;
         loop {
             let instance = self.propose_id;
-            let prepare_message = PrepareMessage { instance, ballot };
-            let replies: Vec<_> = join_all(
-                preparers
-                    .as_mut()
-                    .iter_mut()
-                    .map(|preparer| preparer.request(prepare_message.clone())),
-            )
-            .await
-            .into_iter()
-            .filter_map(|result| result.ok())
-            .collect();
-
-            let max_ballot = Self::get_max_ballot(replies.as_slice());
-            let positive_count = Self::get_positive_count(replies.as_slice());
             let preparer_count = preparers.as_mut().len();
+            let (prepared, max_ballot, accepted_proposal) = self.prepare(&mut preparers, instance, ballot, preparer_count).await;
 
-            if positive_count < (preparer_count + 1) / 2 {
+            if !prepared {
                 if let Some(max_ballot) = max_ballot {
                     ballot = max_ballot.max(ballot) + 1;
                 } else {
@@ -67,31 +112,16 @@ impl<P: Clone> Proposer<P> {
                 continue;
             }
 
-            let accepted_proposal = Self::get_max_accepted_proposal(replies.as_slice());
             let (proposed, current_proposal) = if let Some(p) = accepted_proposal {
                 (false, p)
             } else {
                 (true, proposal.clone())
             };
 
-            let results = join_all(acceptors.as_mut().iter_mut().map(|acceptor| {
-                let message = AcceptMessage {
-                    instance,
-                    ballot,
-                    proposal: current_proposal.clone(),
-                };
-
-                acceptor.request(message)
-            }))
-            .await;
-            let positive_count = results
-                .iter()
-                .filter_map(|result| result.as_ref().ok())
-                .filter(|result| result.state)
-                .count();
             let acceptor_count = acceptors.as_mut().len();
+            let accepted = self.accept(&mut acceptors, instance, ballot, current_proposal, acceptor_count).await;
 
-            if positive_count >= (acceptor_count + 1) / 2 {
+            if accepted {
                 self.propose_id += 1;
 
                 if proposed {
@@ -108,8 +138,8 @@ impl<P: Clone> Proposer<P> {
             .max()
     }
 
-    pub fn get_positive_count(replies: &[PrepareReply<P>]) -> usize {
-        replies.iter().filter(|p| p.state).count()
+    pub fn get_positive_count<T>(replies: &[T], f: impl Fn(&T) -> bool) -> usize {
+        replies.iter().filter(|p| f(p)).count()
     }
 
     pub fn get_max_accepted_proposal(replies: &[PrepareReply<P>]) -> Option<P> {
